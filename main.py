@@ -7,6 +7,7 @@ from typing import List, Tuple, Generator
 import requests
 import torch
 from PIL import Image
+from google.auth.exceptions import RefreshError
 from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
 
 from google.oauth2.credentials import Credentials
@@ -64,15 +65,20 @@ def get_from_photos() -> Generator[Tuple[str, str], None, None]:
     nextPageToken = None
 
     while True:
-        results = service.mediaItems().search(body={
-            "filters": {
-                "mediaTypeFilter": {
-                    "mediaTypes": ["PHOTO"]
-                }
-            },
-            "pageSize": 100,
-            "pageToken": nextPageToken
-        }).execute()
+        try:
+            results = service.mediaItems().search(body={
+                "filters": {
+                    "mediaTypeFilter": {
+                        "mediaTypes": ["PHOTO"]
+                    }
+                },
+                "pageSize": 100,
+                "pageToken": nextPageToken
+            }).execute()
+        except RefreshError:
+            creds = get_cred(SCOPES)
+            service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
+            continue
 
         items = results.get('mediaItems', [])
         items = [(item['baseUrl'], item['id']) for item in items]
@@ -149,11 +155,13 @@ def main():
             image_urls = [i[0] for i in images if i[1] not in existing_ids]
 
             skipped = len(images) - len(image_urls)
+            to_do = len(image_urls)
+
             if skipped > 0:
                 total_skipped += skipped
                 print(f"Skipping {skipped}, total skipped: {total_skipped/existing_count*100 // 1}%")
 
-            if len(image_urls) == 0:
+            if to_do == 0:
                 continue
 
             texts = image_to_text(image_urls)
@@ -161,9 +169,9 @@ def main():
             for i, text in enumerate(texts):
                 writer.writerow([images[i][1], text])
 
-            total_processed += len(image_urls)
+            total_processed += to_do
 
-            print(f"Processed {total_processed}")
+            print(f"Processed {to_do}, This run {total_processed}, Total {total_processed + existing_count}")
 
     print(f"\n\nTotal skipped: {total_skipped}")
     print(f"Total processed: {total_processed}")
