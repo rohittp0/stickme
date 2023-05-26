@@ -159,7 +159,7 @@ def main():
 
             if skipped > 0:
                 total_skipped += skipped
-                print(f"Skipping {skipped}, total skipped: {total_skipped/existing_count*100 // 1}%")
+                print(f"\rSkipping {skipped}, total skipped: {total_skipped/existing_count*100 // 1}%", end="")
 
             if to_do == 0:
                 continue
@@ -171,7 +171,7 @@ def main():
 
             total_processed += to_do
 
-            print(f"Processed {to_do}, This run {total_processed}, Total {total_processed + existing_count}")
+            print(f"\rProcessed {to_do}, This run {total_processed}, Total {total_processed + existing_count}", end="")
 
     print(f"\n\nTotal skipped: {total_skipped}")
     print(f"Total processed: {total_processed}")
