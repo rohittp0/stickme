@@ -1,15 +1,30 @@
 import csv
 import os
-from typing import List, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
+from typing import List, Tuple, Generator
 
-from transformers import pipeline
+import requests
+import torch
+from PIL import Image
+from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from tqdm import tqdm
+
+model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+feature_extractor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+max_length = 32
+num_beams = 4
+gen_kwargs = {"max_length": max_length, "num_beams": num_beams}
 
 
 def get_cred(scopes) -> Credentials:
@@ -22,7 +37,11 @@ def get_cred(scopes) -> Credentials:
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                os.unlink('token.json')
+                return get_cred(scopes)
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', scopes)
             creds = flow.run_local_server(port=8000)
@@ -33,7 +52,7 @@ def get_cred(scopes) -> Credentials:
     return creds
 
 
-def get_from_photos(save=True) -> List[Tuple[str, str]]:
+def get_from_photos() -> Generator[Tuple[str, str], None, None]:
     """
      Get images from Google Photos
     :return: A list of image urls and ids
@@ -42,7 +61,6 @@ def get_from_photos(save=True) -> List[Tuple[str, str]]:
     creds = get_cred(SCOPES)
     service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
 
-    data = []
     nextPageToken = None
 
     while True:
@@ -59,50 +77,96 @@ def get_from_photos(save=True) -> List[Tuple[str, str]]:
         items = results.get('mediaItems', [])
         items = [(item['baseUrl'], item['id']) for item in items]
 
-        # Append to file csv file
-        if save:
-            with open('images.csv', 'a') as f:
-                writer = csv.writer(f)
-                writer.writerows(items)
+        yield items
 
-        data.extend(items)
         nextPageToken = results.get('nextPageToken', None)
         if nextPageToken is None:
             break
 
-    return data
+
+def download_image(image_url):
+    response = requests.get(image_url)
+    if response.status_code != 200:
+        raise Exception(f"{image_url} : Request failed with status code {response.status_code}, {response.text}")
+
+    img = Image.open(BytesIO(response.content))
+    return img
 
 
-def image_to_text(image_url: str) -> List[dict]:
+def predict_step(images_raw: List[Image.Image]) -> List[str]:
+    images = []
+    for i_image in images_raw:
+        if i_image.mode != "RGB":
+            i_image = i_image.convert(mode="RGB")
+
+        images.append(i_image)
+
+    pixel_values = feature_extractor(images=images, return_tensors="pt").pixel_values
+    pixel_values = pixel_values.to(device)
+
+    output_ids = model.generate(pixel_values, **gen_kwargs)
+
+    return [txt.strip() for txt in tokenizer.batch_decode(output_ids, skip_special_tokens=True)]
+
+
+def image_to_text(image_urls: List[str]) -> List[str]:
     """
     Convert image to text
-    :param image_url: The url of the image
+    :param image_urls: The urls of the images
     :return: The text in the image
     """
-    im2txt = pipeline("image-to-text", model="nlpconnect/vit-gpt2-image-captioning")
-    text = im2txt(image_url)
+    images = []
+    predictions = []
 
-    return text
+    with ThreadPoolExecutor() as executor:
+        results = executor.map(download_image, image_urls)
+        for result in results:
+            images.append(result)
+
+            if len(images) >= 25:
+                predictions.extend(predict_step(images))
+                images = []
+
+    if len(images) > 0:
+        predictions.extend(predict_step(images))
+
+    return predictions
 
 
 def main():
-    # images = get_from_photos()
+    total_skipped = 0
+    total_processed = 0
 
-    images = set()
-    with open('images.csv', 'r') as f:
-        for row in tqdm(csv.reader(f), desc='Reading images'):
-            if len(row):
-                images.add((row[0], row[1]))
+    with open('captions.csv', 'r+') as f:
+        reader = csv.reader(f)
+        existing_ids = set([row[0] for row in reader if len(row) > 0])
+        existing_count = len(existing_ids)
 
-    # Unique images only
-    print(f'Number of unique images: {len(images)}')
+        print(f"Existing ids: {existing_count}")
 
-    with open('captions.csv', 'w') as f:
         writer = csv.writer(f)
-        for image in tqdm(images, desc='Captioning images'):
-            image_url, image_id = image
-            text = image_to_text(image_url)[0]['generated_text']
-            writer.writerow([image_id, text, image_url])
+        for images in get_from_photos():
+            image_urls = [i[0] for i in images if i[1] not in existing_ids]
+
+            skipped = len(images) - len(image_urls)
+            if skipped > 0:
+                total_skipped += skipped
+                print(f"Skipping {skipped}, total skipped: {total_skipped/existing_count*100 // 1}%")
+
+            if len(image_urls) == 0:
+                continue
+
+            texts = image_to_text(image_urls)
+
+            for i, text in enumerate(texts):
+                writer.writerow([images[i][1], text])
+
+            total_processed += len(image_urls)
+
+            print(f"Processed {total_processed}")
+
+    print(f"\n\nTotal skipped: {total_skipped}")
+    print(f"Total processed: {total_processed}")
 
 
 if __name__ == '__main__':
