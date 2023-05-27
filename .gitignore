@@ -3,3 +3,4 @@ credentials.json
 token.json
 captions.csv
 images.csv
+captions.npy
