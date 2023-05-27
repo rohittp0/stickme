@@ -2,10 +2,15 @@ import os
 
 import numpy as np
 import requests
+
+from waitress import serve
 from flask import Flask, request, send_from_directory, send_file
+from dotenv import load_dotenv
 
 from caption import load_captions, get_image_by_id
 from search import load_model, get_similarity_index
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -17,6 +22,11 @@ captions = load_captions()
 # Search route with query parameter
 @app.route("/search")
 def search():
+    if not request.headers.get("Authorization"):
+        return "No authorization header", 401
+    if request.headers.get("Authorization") != os.environ.get("AUTHORIZATION"):
+        return "Invalid authorization header", 401
+
     query = request.args.get("q")
     if not query:
         return "No query specified", 400
@@ -34,7 +44,15 @@ def search():
 
 @app.route("/image/<image_id>")
 def image(image_id: str):
-    if os.path.exists(f"public/img/{image_id}.png"):
+    # Check header for authorization
+    if not request.headers.get("Authorization"):
+        return "No authorization header", 401
+    if request.headers.get("Authorization") != os.environ.get("AUTHORIZATION"):
+        return "Invalid authorization header", 401
+
+    image_id = image_id.removesuffix(".png")
+
+    if os.path.exists(f"cache/img/{image_id}.png"):
         return send_file(image_id, mimetype='image/png')
 
     image_url = get_image_by_id(image_id)
@@ -42,10 +60,10 @@ def image(image_id: str):
     if response.status_code != 200:
         raise Exception(f"{image_url} : Request failed with status code {response.status_code}, {response.text}")
 
-    with open(f"public/img/{image_id}.png", "wb") as f:
+    with open(f"cache/img/{image_id}.png", "wb") as f:
         f.write(response.content)
 
-    return send_file(f"public/img/{image_id}.png", mimetype='image/png')
+    return send_file(f"cache/img/{image_id}.png", mimetype='image/png')
 
 
 @app.route('/', defaults={'path': None})
@@ -60,4 +78,4 @@ def public(path: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    serve(app, host="0.0.0.0", port=5000)

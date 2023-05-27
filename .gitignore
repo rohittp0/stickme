@@ -5,3 +5,5 @@ captions.csv
 images.csv
 captions.npy
 public/img/
+**/*.env
+cache/
