@@ -4,3 +4,4 @@ token.json
 captions.csv
 images.csv
 captions.npy
+public/img/
