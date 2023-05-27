@@ -7,7 +7,7 @@ from waitress import serve
 from flask import Flask, request, send_from_directory, send_file
 from dotenv import load_dotenv
 
-from caption import load_captions, get_image_by_id
+from caption import load_captions, get_image_by_id, build_service
 from search import load_model, get_similarity_index
 
 load_dotenv()
@@ -17,6 +17,7 @@ app = Flask(__name__)
 embeddings = np.load("captions.npy")
 tokenizer, model = load_model()
 captions = load_captions()
+build_service()
 
 
 # Search route with query parameter
@@ -37,33 +38,30 @@ def search():
     results = []
     for index in indices:
         image_id, caption = captions[index]
-        results.append({"img": f"/image/{image_id}", "caption": caption})
+        results.append({"img": f"https://photos.rohittp.com/image/{image_id}.png", "caption": caption})
 
     return results
 
 
 @app.route("/image/<image_id>")
 def image(image_id: str):
-    # Check header for authorization
-    if not request.headers.get("Authorization"):
-        return "No authorization header", 401
-    if request.headers.get("Authorization") != os.environ.get("AUTHORIZATION"):
-        return "Invalid authorization header", 401
+    if image_id.endswith(".png"):
+        image_id = image_id[:-4]
 
-    image_id = image_id.removesuffix(".png")
+    image_path = f"cache/img/{image_id}.png"
 
-    if os.path.exists(f"cache/img/{image_id}.png"):
-        return send_file(image_id, mimetype='image/png')
+    if os.path.exists(image_path):
+        return send_file(image_path, mimetype='image/png')
 
     image_url = get_image_by_id(image_id)
     response = requests.get(image_url)
     if response.status_code != 200:
         raise Exception(f"{image_url} : Request failed with status code {response.status_code}, {response.text}")
 
-    with open(f"cache/img/{image_id}.png", "wb") as f:
+    with open(image_path, "wb") as f:
         f.write(response.content)
 
-    return send_file(f"cache/img/{image_id}.png", mimetype='image/png')
+    return send_file(image_path, mimetype='image/png')
 
 
 @app.route('/', defaults={'path': None})
@@ -78,4 +76,4 @@ def public(path: str):
 
 
 if __name__ == "__main__":
-    serve(app, host="0.0.0.0", port=5000)
+    serve(app, host="0.0.0.0", port=5555)

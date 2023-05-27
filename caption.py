@@ -15,19 +15,12 @@ from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-feature_extractor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-
 max_length = 32
 num_beams = 4
 gen_kwargs = {"max_length": max_length, "num_beams": num_beams}
 
 
-def load_captions() -> list[tuple[str, str]]:
+def load_captions():
     with open("captions.csv", "r") as f:
         reader = csv.reader(f)
         return [(row[0], row[1]) for row in reader if len(row) > 1]
@@ -50,7 +43,14 @@ def get_cred(scopes) -> Credentials:
                 return get_cred(scopes)
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', scopes)
-            creds = flow.run_local_server(port=8000)
+            flow.redirect_uri = "http://localhost:8000"
+            auth_url, _ = flow.authorization_url(prompt='consent')
+
+            print('Please go to this URL and authorize the application:', auth_url)
+
+            auth_code = input('Enter the authorization code: ')
+            flow.fetch_token(code=auth_code)
+            creds = flow.credentials
         # Save the credentials for the next run
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
@@ -192,4 +192,11 @@ def main():
 
 
 if __name__ == '__main__':
+    model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+    feature_extractor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+    tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
     main()
