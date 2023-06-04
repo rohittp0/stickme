@@ -26,7 +26,7 @@ def precompute_embeddings(sentences, save_path):
     np.save(save_path, embeddings_mean)
 
 
-def get_similarity_index(search_query, tokenizer, model, embeddings):
+def get_similarity_index(search_query, tokenizer, model, embeddings) -> np.ndarray:
     # Encode the search query with BERT tokenizer and model
     encoded_input = tokenizer(search_query, return_tensors="pt")
     with torch.no_grad():
